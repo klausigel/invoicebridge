@@ -7,9 +7,11 @@ const int maxUpload = 1024 * 1024;
 const int maxResult = 4 * 1024 * 1024;
 Profile[] profiles;
 ToolPaths tools;
+BrowserSessions sessions;
 try
 {
     profiles = Profiles.Load(Environment.GetEnvironmentVariable("INVOICEBRIDGE_PROFILES") ?? "");
+    sessions = new BrowserSessions(profiles, BrowserSessions.LocalLifetime(), TimeProvider.System);
     tools = ToolPaths.Resolve(new BridgeConfiguration {
         Bank = profiles[0].Bank, SourceDirectory = ".", OutputDirectory = ".", SourceFileSelection = "InvoiceNumberToken",
         ToolsDirectory = Environment.GetEnvironmentVariable("INVOICEBRIDGE_TOOLS") ?? "/tools",
@@ -22,7 +24,9 @@ catch (Exception)
     return 2;
 }
 
-var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [], EnvironmentName = "Production" });
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions {
+    Args = [], EnvironmentName = "Production", ContentRootPath = AppContext.BaseDirectory
+});
 builder.Logging.ClearProviders();
 builder.WebHost.ConfigureKestrel(options =>
 {
@@ -34,17 +38,22 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 using var active = new SemaphoreSlim(2);
 await using var app = builder.Build();
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.ContentSecurityPolicy = "default-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'";
+    context.Response.Headers.XContentTypeOptions = "nosniff";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    await next(context);
+});
+app.UseDefaultFiles();
+app.UseStaticFiles();
 app.MapGet("/healthz", () => Results.NoContent());
+sessions.Map(app);
+WebActions.Map(app, sessions, tools, active, maxUpload);
 app.MapPost("/v1/convert", async (HttpContext context) =>
 {
-    context.Response.Headers.CacheControl = "no-store";
-    var keys = context.Request.Headers["X-Api-Key"];
-    var profile = Profiles.Authenticate(profiles, keys.Count == 1 ? keys[0] : null);
-    if (profile == null)
-    {
-        context.Response.Headers.WWWAuthenticate = "ApiKey";
-        return Error(401, "api_key_required", "API-Key fehlt oder ist ungültig.");
-    }
+    var profile = sessions.Authorize(context, out var denied);
+    if (profile == null) return denied;
     if (!string.Equals(context.Request.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase))
         return Error(415, "pdf_required", "Erwartet wird application/pdf als Request-Body.");
     if (context.Request.ContentLength > maxUpload)
@@ -62,20 +71,24 @@ app.MapPost("/v1/convert", async (HttpContext context) =>
             var input = Path.Combine(work.FullName, "input.pdf");
             await using (var upload = File.Create(input))
                 await context.Request.Body.CopyToAsync(upload, token);
-            var sampleMatches = Kig.InvoiceBridge.Program.Hash(input) == Kig.InvoiceBridge.Program.SampleHash;
+            PaymentDecision decision;
             try
             {
-                if (ReadablePayment.Conflicts(input, profile.Bank))
-                    return Error(422, "payment_conflict", "Lesbare Zahlungsdaten widersprechen dem Mandantenprofil.");
+                decision = ReadablePayment.Decide(input, profile);
             }
-            catch (Exception) when (!sampleMatches)
+            catch (Exception)
             {
                 return Error(422, "unsupported_pdf", "Das Rechnungs-PDF konnte nicht als unterstütztes Muster erkannt werden.");
             }
-            if (!sampleMatches)
-                return Error(422, "unsupported_pdf", "Unterstützt wird nur die unveränderte Musterrechnung.");
-            var candidate = await Kig.InvoiceBridge.Program.ConvertAsync(input, work.FullName, profile.Bank, tools,
-                "112684", testPayment: true, cancellationToken: token);
+            if (decision.Payment == null)
+                return decision.Error switch {
+                    "payment_conflict" => Error(422, "payment_conflict", "Lesbare Zahlungsdaten widersprechen dem Mandantenprofil."),
+                    "payment_ambiguous" => Error(422, "payment_ambiguous", "Mehr als eine plausible Bankverbindung oder Zahlungsangabe."),
+                    _ => Error(422, "payment_unclear", "Der Bankblock fehlt, ist unklar oder ist für einen Ersatz nicht freigegeben.")
+                };
+            var candidate = await Kig.InvoiceBridge.Program.ConvertAsync(input, work.FullName, decision.Payment, tools,
+                "112684", replaceGraphicBank: decision.ReplaceGraphicBank, cancellationToken: token,
+                requireBlankQrArea: !decision.ReplaceGraphicBank);
             if (new FileInfo(candidate).Length > maxResult)
                 throw new InvalidDataException();
             var result = await File.ReadAllBytesAsync(candidate, token);
@@ -102,6 +115,10 @@ app.MapPost("/v1/convert", async (HttpContext context) =>
     catch (Kig.InvoiceBridge.Program.ToolFailure)
     {
         return Error(500, "tool_failed", "Ein Konvertierungs- oder Prüfwerkzeug ist fehlgeschlagen.");
+    }
+    catch (BridgeException ex) when (ex.ExitCode == 11)
+    {
+        return Error(422, "unsupported_pdf", ex.Message);
     }
     catch (Exception)
     {

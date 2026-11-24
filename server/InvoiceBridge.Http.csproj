@@ -8,4 +8,8 @@
     <ProjectReference Include="../Kig.InvoiceBridge.csproj" AdditionalProperties="IncludeLocalInvoiceConfig=false" />
     <Content Remove="*.local.json" />
   </ItemGroup>
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <!-- Replace manually copied assets even when their timestamps are newer than the source. -->
+    <Content Update="wwwroot/**/*" CopyToOutputDirectory="Always" />
+  </ItemGroup>
 </Project>

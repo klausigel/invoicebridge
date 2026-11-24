@@ -10,3 +10,4 @@ __pycache__/
 /invoicebridge.json
 *.class
 *.local.json
+.playwright-cli/

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>InvoiceBridge · Rechnungen bearbeiten</title>
+  <link rel="stylesheet" href="/site.css">
+  <script src="/site.js" defer></script>
+</head>
+<body>
+  <header class="masthead"><div class="shell brand">
+    <span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span>InvoiceBridge</span>
+    <span class="local">Lokaler Betrieb</span>
+    <div class="session" id="session" hidden>
+      <span id="tenant"></span>
+      <button type="button" id="logout">Abmelden</button>
+    </div>
+  </div></header>
+  <main class="shell">
+    <p id="session-loading" role="status">Sitzung wird geprüft …</p>
+    <section class="panel sign-in" id="sign-in" hidden></section>
+    <template id="sign-in-template">
+      <h1>Anmelden</h1>
+      <p>Zum Bearbeiten von Rechnungen den API-Schlüssel deines Mandanten eingeben.</p>
+      <form method="post" action="/v1/session/login" autocomplete="off">
+        <label for="key">API-Schlüssel</label>
+        <input id="key" type="password" autocomplete="off" spellcheck="false" required>
+        <button class="primary" type="submit">Anmelden</button>
+      </form>
+      <p id="login-status" class="status" role="status"></p>
+    </template>
+    <div id="workspace" hidden>
+    <h1 id="workspace-title" tabindex="-1">Rechnungen bearbeiten</h1>
+    <p id="session-status" class="status" role="status"></p>
+    <div class="tabs" role="tablist" aria-label="Rechnungsaktionen">
+      <button type="button" role="tab" id="convert-tab" aria-selected="true" aria-controls="convert-panel">PDF umwandeln</button>
+      <button type="button" role="tab" id="validate-tab" aria-selected="false" aria-controls="validate-panel" tabindex="-1">ZUGFeRD-Rechnung prüfen</button>
+      <button type="button" role="tab" id="payment-tab" aria-selected="false" aria-controls="payment-panel" tabindex="-1">GiroCode erstellen</button>
+    </div>
+    <section class="panel" id="convert-panel" role="tabpanel" aria-labelledby="convert-tab">
+      <h2>ZUGFeRD-PDF erstellen</h2>
+      <p>Die freigegebene Rechnungsvorlage hochladen und die geprüfte ZUGFeRD-PDF herunterladen.</p>
+      <form id="convert">
+        <label class="upload" for="convert-file"><strong>Rechnungs-PDF</strong><input id="convert-file" type="file" accept=".pdf,application/pdf" aria-describedby="convert-file-message" required><small>PDF hier ablegen oder auswählen, maximal 1 MiB</small><span class="file-message" id="convert-file-message" role="status"></span></label>
+        <button class="primary" type="submit">PDF umwandeln</button>
+      </form>
+      <p id="convert-status" class="status" role="status"></p>
+      <a id="download" class="download" download="Rechnung-ZUGFeRD.pdf" hidden>ZUGFeRD-PDF herunterladen</a>
+    </section>
+    <section class="panel" id="validate-panel" role="tabpanel" aria-labelledby="validate-tab" hidden>
+      <h2>Formale Prüfung</h2>
+      <p>Eine ZUGFeRD-PDF im Profil EN 16931 prüfen. Das Ergebnis zeigt den Status jeder Einzelprüfung.</p>
+      <form id="validate">
+        <label class="upload" for="validate-file"><strong>ZUGFeRD-PDF</strong><input id="validate-file" type="file" accept=".pdf,application/pdf" aria-describedby="validate-file-message" required><small>PDF hier ablegen oder auswählen, maximal 1 MiB</small><span class="file-message" id="validate-file-message" role="status"></span></label>
+        <button class="primary" type="submit">Prüfung starten</button>
+      </form>
+      <p id="validate-status" class="status" role="status"></p>
+      <ul id="checks" class="checks" hidden></ul>
+    </section>
+    <section class="panel" id="payment-panel" role="tabpanel" aria-labelledby="payment-tab" hidden>
+      <h2>GiroCode für eine Überweisung</h2>
+      <p>Zahlungsdaten aus einer PDF oder ZUGFeRD-XML übernehmen oder selbst eingeben.</p>
+      <form id="import">
+        <label class="upload" for="payment-file"><strong>Rechnung zur Vorbefüllung (optional)</strong><input id="payment-file" type="file" accept=".pdf,.xml,application/pdf,application/xml,text/xml" aria-describedby="payment-file-message" required><small>PDF oder XML hier ablegen oder auswählen, maximal 1 MiB</small><span class="file-message" id="payment-file-message" role="status"></span></label>
+        <button type="submit" class="secondary">Zahlungsdaten lesen</button>
+      </form>
+      <p id="import-status" class="status" role="status"></p>
+      <form id="payment" class="payment">
+        <label>Empfänger<input name="beneficiary" maxlength="70" required></label>
+        <label>IBAN<input name="iban" maxlength="34" spellcheck="false" required></label>
+        <label>Betrag in EUR<input name="amount" inputmode="decimal" placeholder="0,00" aria-describedby="amount-message" required><small id="amount-message" role="status"></small></label>
+        <label>BIC (optional)<input name="bic" maxlength="11" spellcheck="false"></label>
+        <label class="wide">Verwendungszweck<input name="reference" maxlength="140" required></label>
+        <button class="primary" type="submit">Angaben prüfen</button>
+      </form>
+      <div id="confirmation" class="confirmation" hidden>
+        <div>
+          <h3>Zahlungsdaten bestätigen</h3>
+          <dl id="payment-review"></dl>
+          <button id="make-code" class="primary" type="button">Bestätigen und GiroCode erzeugen</button>
+        </div>
+        <div id="code" class="code" hidden><img id="qr" alt="GiroCode für die angezeigten Zahlungsdaten"></div>
+      </div>
+      <p id="payment-status" class="status" role="status"></p>
+    </section>
+    </div>
+  </main>
+</body>
+</html>

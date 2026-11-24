@@ -4,9 +4,11 @@
       "commandName": "Project",
       "launchBrowser": true,
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "INVOICEBRIDGE_PROFILES": "C:\\git\\kig\\netproof\\invoicebridge\\artifacts\\http-local\\tenants.local.json",
+        "INVOICEBRIDGE_TOOLS": "C:\\git\\kig\\netproof\\invoicebridge\\artifacts\\Kig.InvoiceBridge-pre-checkin-clean-win-x64\\tools"
       },
-      "applicationUrl": "https://localhost:63878;http://localhost:63879"
+      "applicationUrl": "http://127.0.0.1:8080"
     }
   }
 }

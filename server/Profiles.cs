@@ -4,9 +4,9 @@ using System.Text;
 using System.Text.Json;
 using Kig.InvoiceBridge;
 
-internal sealed record Profile(string Id, byte[] KeyHash, PaymentDetails Bank);
+internal sealed record Profile(string Id, byte[] KeyHash, PaymentDetails Bank, string? ApprovedGraphicSha256);
 
-internal sealed record ProfileFile(string Id, string ApiKey, PaymentDetails Bank);
+internal sealed record ProfileFile(string Id, string ApiKey, PaymentDetails Bank, string? ApprovedGraphicSha256);
 
 internal static class Profiles
 {
@@ -29,7 +29,10 @@ internal static class Profiles
             bank.Validate("NetProof GmbH");
             if (bank.Iban[4..12] != "00000000" || string.IsNullOrWhiteSpace(bank.BankName))
                 throw new InvalidDataException();
-            return new Profile(p.Id, Digest(p.ApiKey), bank);
+            var graphic = p.ApprovedGraphicSha256?.ToUpperInvariant();
+            if (graphic != null && (graphic.Length != 64 || !graphic.All(char.IsAsciiHexDigit)))
+                throw new InvalidDataException();
+            return new Profile(p.Id, Digest(p.ApiKey), bank, graphic);
         }).ToArray();
         if (result[0].Bank.Iban == result[1].Bank.Iban || result[0].Bank.Bic == result[1].Bank.Bic)
             throw new InvalidDataException();

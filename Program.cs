@@ -64,7 +64,7 @@ internal static class Program
             var timer = Stopwatch.StartNew();
             failureExitCode = 21;
             var candidate = await ConvertAsync(input, evidence, settings.Bank, tools, invoiceNumber,
-                testPayment: false, progress: Console.WriteLine);
+                replaceGraphicBank: false, progress: Console.WriteLine);
             if (Hash(input) != SampleHash) throw new InvalidDataException("Originaldatei wurde während des Laufs verändert.");
             pending = work + ".pending";
             File.Move(candidate, pending, false);
@@ -110,13 +110,17 @@ internal static class Program
     }
 
     internal static async Task<string> ConvertAsync(string input, string evidence, PaymentDetails payment,
-        ToolPaths tools, string expectedNumber, bool testPayment, Action<string>? progress = null,
-        CancellationToken cancellationToken = default)
+        ToolPaths tools, string expectedNumber, bool replaceGraphicBank, Action<string>? progress = null,
+        CancellationToken cancellationToken = default, bool requireBlankQrArea = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var mustang = tools.Mustang;
-        var vera = tools.VeraPdf;
-        var snapshot = Extract(input, payment);
+        Snapshot snapshot;
+        try { snapshot = Extract(input, payment); }
+        catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException)
+        {
+            throw new BridgeException(11, "Das PDF entspricht nicht dem unterstützten Rechnungsmuster.");
+        }
         if (snapshot.Number != expectedNumber) throw new BridgeException(11, "Die Rechnungsnummer im PDF stimmt nicht mit der angeforderten Nummer überein.");
         var xml = Path.Combine(evidence, "factur-x.xml");
         WriteXml(snapshot, xml);
@@ -127,10 +131,15 @@ internal static class Program
         await ValidateMustang(tools.Java, mustang, xml, Path.Combine(evidence, "xml-validation"), progress, cancellationToken);
         var withGiroCode = Path.Combine(evidence, "with-girocode.pdf");
         var originalRender = Path.Combine(evidence, "original-render.ppm");
-        if (testPayment)
+        RgbRaster? inputRaster = null;
+        if (replaceGraphicBank || requireBlankQrArea)
+        {
             await Render(tools, input, originalRender, "render-original", cancellationToken);
+            inputRaster = RgbRaster.Open(originalRender);
+            if (requireBlankQrArea) PaymentDetails.RequireBlankQrArea(inputRaster);
+        }
         snapshot.Payment.AddGiroCode(input, withGiroCode, snapshot.Gross, snapshot.Number,
-            testPayment ? RgbRaster.Open(originalRender) : null);
+            replaceGraphicBank ? inputRaster : null);
         var basePdf = Path.Combine(evidence, "pdfa3-base.pdf");
         var definition = Path.Combine(evidence, "pdfa.ps");
         var icc = tools.IccProfile.Replace('\\', '/');
@@ -141,23 +150,19 @@ internal static class Program
         await ValidateMustang(tools.Java, mustang, candidate, Path.Combine(evidence, "hybrid-validation"), progress, cancellationToken);
         // Same veraPDF CLI wrapper as verapdf.bat, invoked directly to use
         // the bundled JRE safely with paths containing spaces. Separate check retained.
-        var veraResult = await Run(tools.Java, ["-Dfile.encoding=UTF8", "-XX:+IgnoreUnrecognizedVMOptions", "-classpath", Path.Combine(Path.GetDirectoryName(vera)!, "*"), "--add-exports=java.base/sun.security.pkcs=ALL-UNNAMED", "org.verapdf.apps.GreenfieldCliWrapper", "--format", "xml", "--flavour", "3b", candidate], Path.Combine(evidence, "pdfa-validation"), cancellationToken);
-        var veraXml = ParseReport(veraResult);
-        var reports = veraXml.DescendantsAndSelf().Where(x => x.Name.LocalName == "validationReport").ToArray();
-        if (reports.Length != 1 || (string?)reports[0].Attribute("isCompliant") != "true") throw new InvalidDataException("Finale PDF/A-3b-Prüfung fehlgeschlagen. Siehe Prüfprotokoll.");
-        var counts = reports[0].Elements().Single(e => e.Name.LocalName == "details");
-        progress?.Invoke($"PASS pdfa-3b rules={(int?)counts.Attribute("passedRules")} checks={(int?)counts.Attribute("passedChecks")}");
-        var extracted = Path.Combine(evidence, "extracted.xml");
-        await Run(tools.Java, ["-jar", mustang, "--action", "extract", "--source", candidate, "--out", extracted, "--disable-file-logging"], Path.Combine(evidence, "extract"), cancellationToken);
+        var veraResult = await CheckPdfAAsync(tools, candidate, evidence, cancellationToken);
+        if (!veraResult.Valid) throw new InvalidDataException("PDF/A-3b-Prüfung fehlgeschlagen.");
+        progress?.Invoke($"PASS pdfa-3b rules={veraResult.Rules} checks={veraResult.Checks}");
+        var extracted = await ExtractAttachmentAsync(tools, candidate, evidence, cancellationToken);
         if (!File.Exists(extracted) || !XNode.DeepEquals(XDocument.Load(xml), XDocument.Load(extracted))) throw new InvalidDataException("Rückextrahierte XML stimmt nicht mit der erzeugten XML überein.");
         CheckXml(snapshot, XDocument.Load(extracted));
         progress?.Invoke("PASS xml-roundtrip-and-fields");
         // Keep QR decoding and the visual comparison available in the deployed
         // CLI without relying on the development Python/Poppler installation.
         var finalRender = Path.Combine(evidence, "final-render.ppm");
-        if (!testPayment) await Render(tools, input, originalRender, "render-original", cancellationToken);
+        if (inputRaster == null) await Render(tools, input, originalRender, "render-original", cancellationToken);
         await Render(tools, candidate, finalRender, "render-final", cancellationToken);
-        snapshot.Payment.VerifyRendered(originalRender, finalRender, snapshot.Gross, snapshot.Number, testPayment);
+        snapshot.Payment.VerifyRendered(originalRender, finalRender, snapshot.Gross, snapshot.Number, replaceGraphicBank);
         progress?.Invoke("PASS rendered-qr-and-image");
         return candidate;
     }
@@ -169,7 +174,7 @@ internal static class Program
 
     internal static string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
 
-    static Snapshot Extract(string path, PaymentDetails payment)
+    internal static Snapshot Extract(string path, PaymentDetails payment)
     {
         using var pdf = PdfDocument.Open(path);
         if (pdf.NumberOfPages != 1) throw new InvalidDataException("Eine Seite erwartet.");
@@ -263,12 +268,55 @@ internal static class Program
 
     static async Task ValidateMustang(string java, string jar, string source, string log, Action<string>? progress, CancellationToken cancellationToken)
     {
-        var result = await Run(java, ["-jar", jar, "--action", "validate", "--source", source, "--no-notices", "--disable-file-logging"], log, cancellationToken);
-        var report = ParseReport(result);
-        if (report.Elements().LastOrDefault(x => x.Name.LocalName == "summary")?.Attribute("status")?.Value != "valid" || report.Descendants().Any(x => x.Name.LocalName == "summary" && (string?)x.Attribute("status") != "valid")) throw new InvalidDataException("Mustang meldet kein gültiges Ergebnis.");
+        if (!await CheckMustangAsync(java, jar, source, log, cancellationToken))
+            throw new InvalidDataException("Mustang meldet ein ungültiges Ergebnis.");
         progress?.Invoke("PASS " + Path.GetFileName(log));
     }
+    internal static async Task<bool> CheckMustangAsync(string java, string jar, string source, string step, CancellationToken token)
+    {
+        var (report, failed) = await ValidationReport(java, ["-jar", jar, "--action", "validate", "--source", source,
+            "--no-notices", "--disable-file-logging"], step, token);
+        var summary = (string?)report.Elements().LastOrDefault(x => x.Name.LocalName == "summary")?.Attribute("status");
+        if (summary == "invalid") return false;
+        if (summary != "valid" || failed) throw new InvalidDataException("Kein verwertbarer Mustang-Prüfbericht.");
+        return !report.Descendants().Any(x => x.Name.LocalName == "summary" && (string?)x.Attribute("status") != "valid");
+    }
+
+    internal static async Task<(bool Valid, int? Rules, int? Checks)> CheckPdfAAsync(
+        ToolPaths tools, string source, string work, CancellationToken token)
+    {
+        var (report, failed) = await ValidationReport(tools.Java, ["-Dfile.encoding=UTF8", "-XX:+IgnoreUnrecognizedVMOptions",
+            "-classpath", Path.Combine(Path.GetDirectoryName(tools.VeraPdf)!, "*"),
+            "--add-exports=java.base/sun.security.pkcs=ALL-UNNAMED", "org.verapdf.apps.GreenfieldCliWrapper",
+            "--format", "xml", "--flavour", "3b", source], Path.Combine(work, "pdfa-validation"), token);
+        var findings = report.Descendants().Where(x => x.Name.LocalName == "validationReport").ToArray();
+        var result = findings.Length == 1 ? (string?)findings[0].Attribute("isCompliant") : null;
+        if (result == "false") return (false, null, null);
+        if (result != "true" || failed) throw new InvalidDataException("Kein verwertbarer veraPDF-Prüfbericht.");
+        var counts = findings[0].Elements().Single(x => x.Name.LocalName == "details");
+        return (true, (int?)counts.Attribute("passedRules"), (int?)counts.Attribute("passedChecks"));
+    }
+
+    static async Task<(XElement Report, bool Failed)> ValidationReport(string file, string[] args, string step, CancellationToken token)
+    {
+        try { return (ParseReport(await Run(file, args, step, token)), false); }
+        catch (ToolFailure ex) when (ex.Report != null) { return (ParseReport(ex.Report), true); }
+    }
+
+    internal static async Task<string> ExtractAttachmentAsync(ToolPaths tools, string source, string work, CancellationToken token)
+    {
+        var path = Path.Combine(work, "extracted.xml");
+        await Run(tools.Java, ["-jar", tools.Mustang, "--action", "extract", "--source", source,
+            "--out", path, "--disable-file-logging"], Path.Combine(work, "extract"), token);
+        return path;
+    }
+
     static void ValidateSchema(string jar, string xml)
+    {
+        if (!CheckSchema(jar, xml)) throw new InvalidDataException("XML-Schemaprüfung fehlgeschlagen.");
+    }
+
+    internal static bool CheckSchema(string jar, string xml)
     {
         const string prefix = "schema/ZF_250/EN16931/";
         using var zip = ZipFile.OpenRead(jar);
@@ -286,8 +334,9 @@ internal static class Program
         var errors = new List<string>();
         var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, ValidationType = ValidationType.Schema, Schemas = schemas };
         settings.ValidationEventHandler += (_, e) => errors.Add(e.Message);
-        using (var reader = XmlReader.Create(xml, settings)) while (reader.Read()) { }
-        if (errors.Count != 0) throw new InvalidDataException("XML-Schemaprüfung fehlgeschlagen: " + string.Join("; ", errors));
+        try { using var reader = XmlReader.Create(xml, settings); while (reader.Read()) { } }
+        catch (XmlException) { return false; }
+        return errors.Count == 0;
     }
     static XElement ParseReport(string text)
     {
@@ -322,16 +371,17 @@ internal static class Program
         }
         await stderr;
         var report = await stdout;
-        if (process.ExitCode != 0) throw new ToolFailure(Path.GetFileName(step), process.ExitCode);
+        if (process.ExitCode != 0) throw new ToolFailure(Path.GetFileName(step), process.ExitCode, report);
         return report;
     }
 
-    internal sealed class ToolFailure(string stage, int exitCode) : Exception
+    internal sealed class ToolFailure(string stage, int exitCode, string? report = null) : Exception
     {
         internal string Stage { get; } = stage;
         internal int ExitCode { get; } = exitCode;
+        internal string? Report { get; } = report;
     }
 
-    record Field(string Value, string Source, double[]? Region);
-    record Snapshot(string Number, DateTime Date, DateTime Delivery, string Seller, string SellerStreet, string SellerPostcode, string SellerCity, string VatId, string Buyer, string BuyerStreet, string BuyerPostcode, string BuyerCity, string ItemName, string Description, decimal Quantity, decimal Price, decimal LineNet, decimal Rate, decimal Net, decimal Tax, decimal Gross, string Terms, Dictionary<string, Field> Provenance, PaymentDetails Payment);
+    internal record Field(string Value, string Source, double[]? Region);
+    internal record Snapshot(string Number, DateTime Date, DateTime Delivery, string Seller, string SellerStreet, string SellerPostcode, string SellerCity, string VatId, string Buyer, string BuyerStreet, string BuyerPostcode, string BuyerCity, string ItemName, string Description, decimal Quantity, decimal Price, decimal LineNet, decimal Rate, decimal Net, decimal Tax, decimal Gross, string Terms, Dictionary<string, Field> Provenance, PaymentDetails Payment);
 }
