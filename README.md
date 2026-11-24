@@ -3,6 +3,9 @@
 Lokaler Prototyp für **genau die freigegebene Musterrechnung 112684**.
 Nicht als allgemeine Rechnungsverarbeitung oder Produktionsfreigabe verwenden.
 
+Für den lokalen Linux-Container mit HTTP-Upload und Testmandanten siehe
+[HTTP.md](HTTP.md).
+
 1. ZIP vollständig in einen beschreibbaren Ordner entpacken.
 2. `invoicebridge.example.json` als `invoicebridge.json` neben die EXE kopieren.
    Dort die bestätigten Bankdaten eintragen und Quell- und Zielordner einstellen.

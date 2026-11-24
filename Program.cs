@@ -14,7 +14,7 @@ namespace Kig.InvoiceBridge;
 
 internal static class Program
 {
-    const string SampleHash = "B5F46736EFB3DF675BA7F4E8BFB8B3EC2E73732CB71FA186AD4777F91F2F300C";
+    internal const string SampleHash = "B5F46736EFB3DF675BA7F4E8BFB8B3EC2E73732CB71FA186AD4777F91F2F300C";
     static readonly CultureInfo German = CultureInfo.GetCultureInfo("de-DE");
 
     static async Task<int> Main(string[] args)
@@ -52,8 +52,6 @@ internal static class Program
             if (File.Exists(output)) throw new BridgeException(12, "Ausgabedatei existiert bereits: " + output);
             if (Hash(input) != SampleHash) throw new BridgeException(11, "Nicht unterstütztes PDF: Nur die unveränderte freigegebene Musterrechnung 112684 ist erlaubt.");
             var tools = ToolPaths.Resolve(settings);
-            var mustang = tools.Mustang;
-            var vera = tools.VeraPdf;
             Directory.CreateDirectory(settings.OutputDirectory);
             FileStream reservation;
             try { reservation = new FileStream(output + ".lock", FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose); }
@@ -64,48 +62,9 @@ internal static class Program
             else Directory.CreateDirectory(work, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             evidence = work;
             var timer = Stopwatch.StartNew();
-            failureExitCode = 11;
-            var snapshot = Extract(input, settings.Bank);
-            if (snapshot.Number != invoiceNumber) throw new BridgeException(11, "Die Rechnungsnummer im PDF stimmt nicht mit der angeforderten Nummer überein.");
             failureExitCode = 21;
-            var xml = Path.Combine(evidence, "factur-x.xml");
-            WriteXml(snapshot, xml);
-            ValidateSchema(mustang, xml);
-            Console.WriteLine("PASS xsd");
-
-            // XML must pass before the hybrid PDF is created. No network or web validators.
-            await ValidateMustang(tools.Java, mustang, xml, Path.Combine(evidence, "xml-validation"));
-            var withGiroCode = Path.Combine(evidence, "with-girocode.pdf");
-            snapshot.Payment.AddGiroCode(input, withGiroCode, snapshot.Gross, snapshot.Number);
-            var basePdf = Path.Combine(evidence, "pdfa3-base.pdf");
-            var definition = Path.Combine(evidence, "pdfa.ps");
-            var icc = tools.IccProfile.Replace('\\', '/');
-            File.WriteAllText(definition, "%!\n/ICCProfile (" + icc.Replace("(", "\\(").Replace(")", "\\)") + ") def\n[/_objdef {icc_PDFA} /type /stream /OBJ pdfmark\n[{icc_PDFA} << /N 3 >> /PUT pdfmark\n[{icc_PDFA} ICCProfile (r) file /PUT pdfmark\n[/_objdef {OutputIntent_PDFA} /type /dict /OBJ pdfmark\n[{OutputIntent_PDFA} << /Type /OutputIntent /S /GTS_PDFA1 /DestOutputProfile {icc_PDFA} /OutputConditionIdentifier (sRGB) >> /PUT pdfmark\n[{Catalog} << /OutputIntents [ {OutputIntent_PDFA} ] >> /PUT pdfmark\n");
-            await Run(tools.Ghostscript, ["-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite", "-dPDFA=3", "-dPDFACompatibilityPolicy=2", "-sColorConversionStrategy=RGB", "-dAutoRotatePages=/None", "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false", "-dDownsampleMonoImages=false", "--permit-file-read=" + icc, "-sOutputFile=" + basePdf, definition, withGiroCode], Path.Combine(evidence, "ghostscript"));
-            var candidate = Path.Combine(evidence, "candidate.pdf");
-            await Run(tools.Java, ["-jar", mustang, "--action", "combine", "--source", basePdf, "--source-xml", xml, "--out", candidate, "--format", "fx", "--version", "2", "--profile", "E", "--no-additional-attachments", "--disable-file-logging"], Path.Combine(evidence, "combine"));
-            await ValidateMustang(tools.Java, mustang, candidate, Path.Combine(evidence, "hybrid-validation"));
-            // Same veraPDF CLI wrapper as verapdf.bat, invoked directly to use
-            // the bundled JRE safely with paths containing spaces. Separate check retained.
-            var veraResult = await Run(tools.Java, ["-Dfile.encoding=UTF8", "-XX:+IgnoreUnrecognizedVMOptions", "-classpath", Path.Combine(Path.GetDirectoryName(vera)!, "*"), "--add-exports=java.base/sun.security.pkcs=ALL-UNNAMED", "org.verapdf.apps.GreenfieldCliWrapper", "--format", "xml", "--flavour", "3b", candidate], Path.Combine(evidence, "pdfa-validation"));
-            var veraXml = ParseReport(veraResult);
-            var reports = veraXml.DescendantsAndSelf().Where(x => x.Name.LocalName == "validationReport").ToArray();
-            if (reports.Length != 1 || (string?)reports[0].Attribute("isCompliant") != "true") throw new InvalidDataException("Finale PDF/A-3b-Prüfung fehlgeschlagen. Siehe Prüfprotokoll.");
-            var counts = reports[0].Elements().Single(e => e.Name.LocalName == "details");
-            Console.WriteLine($"PASS pdfa-3b rules={(int?)counts.Attribute("passedRules")} checks={(int?)counts.Attribute("passedChecks")}");
-            var extracted = Path.Combine(evidence, "extracted.xml");
-            await Run(tools.Java, ["-jar", mustang, "--action", "extract", "--source", candidate, "--out", extracted, "--disable-file-logging"], Path.Combine(evidence, "extract"));
-            if (!File.Exists(extracted) || !XNode.DeepEquals(XDocument.Load(xml), XDocument.Load(extracted))) throw new InvalidDataException("Rückextrahierte XML stimmt nicht mit der erzeugten XML überein.");
-            CheckXml(snapshot, XDocument.Load(extracted));
-            Console.WriteLine("PASS xml-roundtrip-and-fields");
-            // Keep QR decoding and the visual comparison available in the deployed
-            // CLI without relying on the development Python/Poppler installation.
-            var originalRender = Path.Combine(evidence, "original-render.ppm");
-            var finalRender = Path.Combine(evidence, "final-render.ppm");
-            await Run(tools.Ghostscript, ["-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=ppmraw", "-r150", "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4", "-sOutputFile=" + originalRender, input], Path.Combine(evidence, "render-original"));
-            await Run(tools.Ghostscript, ["-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=ppmraw", "-r150", "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4", "-sOutputFile=" + finalRender, candidate], Path.Combine(evidence, "render-final"));
-            snapshot.Payment.VerifyRendered(originalRender, finalRender, snapshot.Gross, snapshot.Number);
-            Console.WriteLine("PASS rendered-qr-and-image");
+            var candidate = await ConvertAsync(input, evidence, settings.Bank, tools, invoiceNumber,
+                testPayment: false, progress: Console.WriteLine);
             if (Hash(input) != SampleHash) throw new InvalidDataException("Originaldatei wurde während des Laufs verändert.");
             pending = work + ".pending";
             File.Move(candidate, pending, false);
@@ -150,7 +109,65 @@ internal static class Program
         }
     }
 
-    static string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+    internal static async Task<string> ConvertAsync(string input, string evidence, PaymentDetails payment,
+        ToolPaths tools, string expectedNumber, bool testPayment, Action<string>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var mustang = tools.Mustang;
+        var vera = tools.VeraPdf;
+        var snapshot = Extract(input, payment);
+        if (snapshot.Number != expectedNumber) throw new BridgeException(11, "Die Rechnungsnummer im PDF stimmt nicht mit der angeforderten Nummer überein.");
+        var xml = Path.Combine(evidence, "factur-x.xml");
+        WriteXml(snapshot, xml);
+        ValidateSchema(mustang, xml);
+        progress?.Invoke("PASS xsd");
+
+        // XML must pass before the hybrid PDF is created. No network or web validators.
+        await ValidateMustang(tools.Java, mustang, xml, Path.Combine(evidence, "xml-validation"), progress, cancellationToken);
+        var withGiroCode = Path.Combine(evidence, "with-girocode.pdf");
+        var originalRender = Path.Combine(evidence, "original-render.ppm");
+        if (testPayment)
+            await Render(tools, input, originalRender, "render-original", cancellationToken);
+        snapshot.Payment.AddGiroCode(input, withGiroCode, snapshot.Gross, snapshot.Number,
+            testPayment ? RgbRaster.Open(originalRender) : null);
+        var basePdf = Path.Combine(evidence, "pdfa3-base.pdf");
+        var definition = Path.Combine(evidence, "pdfa.ps");
+        var icc = tools.IccProfile.Replace('\\', '/');
+        File.WriteAllText(definition, "%!\n/ICCProfile (" + icc.Replace("(", "\\(").Replace(")", "\\)") + ") def\n[/_objdef {icc_PDFA} /type /stream /OBJ pdfmark\n[{icc_PDFA} << /N 3 >> /PUT pdfmark\n[{icc_PDFA} ICCProfile (r) file /PUT pdfmark\n[/_objdef {OutputIntent_PDFA} /type /dict /OBJ pdfmark\n[{OutputIntent_PDFA} << /Type /OutputIntent /S /GTS_PDFA1 /DestOutputProfile {icc_PDFA} /OutputConditionIdentifier (sRGB) >> /PUT pdfmark\n[{Catalog} << /OutputIntents [ {OutputIntent_PDFA} ] >> /PUT pdfmark\n");
+        await Run(tools.Ghostscript, ["-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite", "-dPDFA=3", "-dPDFACompatibilityPolicy=2", "-sColorConversionStrategy=RGB", "-dAutoRotatePages=/None", "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false", "-dDownsampleMonoImages=false", "--permit-file-read=" + icc, "-sOutputFile=" + basePdf, definition, withGiroCode], Path.Combine(evidence, "ghostscript"), cancellationToken);
+        var candidate = Path.Combine(evidence, "candidate.pdf");
+        await Run(tools.Java, ["-jar", mustang, "--action", "combine", "--source", basePdf, "--source-xml", xml, "--out", candidate, "--format", "fx", "--version", "2", "--profile", "E", "--no-additional-attachments", "--disable-file-logging"], Path.Combine(evidence, "combine"), cancellationToken);
+        await ValidateMustang(tools.Java, mustang, candidate, Path.Combine(evidence, "hybrid-validation"), progress, cancellationToken);
+        // Same veraPDF CLI wrapper as verapdf.bat, invoked directly to use
+        // the bundled JRE safely with paths containing spaces. Separate check retained.
+        var veraResult = await Run(tools.Java, ["-Dfile.encoding=UTF8", "-XX:+IgnoreUnrecognizedVMOptions", "-classpath", Path.Combine(Path.GetDirectoryName(vera)!, "*"), "--add-exports=java.base/sun.security.pkcs=ALL-UNNAMED", "org.verapdf.apps.GreenfieldCliWrapper", "--format", "xml", "--flavour", "3b", candidate], Path.Combine(evidence, "pdfa-validation"), cancellationToken);
+        var veraXml = ParseReport(veraResult);
+        var reports = veraXml.DescendantsAndSelf().Where(x => x.Name.LocalName == "validationReport").ToArray();
+        if (reports.Length != 1 || (string?)reports[0].Attribute("isCompliant") != "true") throw new InvalidDataException("Finale PDF/A-3b-Prüfung fehlgeschlagen. Siehe Prüfprotokoll.");
+        var counts = reports[0].Elements().Single(e => e.Name.LocalName == "details");
+        progress?.Invoke($"PASS pdfa-3b rules={(int?)counts.Attribute("passedRules")} checks={(int?)counts.Attribute("passedChecks")}");
+        var extracted = Path.Combine(evidence, "extracted.xml");
+        await Run(tools.Java, ["-jar", mustang, "--action", "extract", "--source", candidate, "--out", extracted, "--disable-file-logging"], Path.Combine(evidence, "extract"), cancellationToken);
+        if (!File.Exists(extracted) || !XNode.DeepEquals(XDocument.Load(xml), XDocument.Load(extracted))) throw new InvalidDataException("Rückextrahierte XML stimmt nicht mit der erzeugten XML überein.");
+        CheckXml(snapshot, XDocument.Load(extracted));
+        progress?.Invoke("PASS xml-roundtrip-and-fields");
+        // Keep QR decoding and the visual comparison available in the deployed
+        // CLI without relying on the development Python/Poppler installation.
+        var finalRender = Path.Combine(evidence, "final-render.ppm");
+        if (!testPayment) await Render(tools, input, originalRender, "render-original", cancellationToken);
+        await Render(tools, candidate, finalRender, "render-final", cancellationToken);
+        snapshot.Payment.VerifyRendered(originalRender, finalRender, snapshot.Gross, snapshot.Number, testPayment);
+        progress?.Invoke("PASS rendered-qr-and-image");
+        return candidate;
+    }
+
+    static Task<string> Render(ToolPaths tools, string input, string output, string stage, CancellationToken token) =>
+        Run(tools.Ghostscript, ["-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=ppmraw", "-r150",
+            "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4", "-sOutputFile=" + output, input],
+            Path.Combine(Path.GetDirectoryName(output)!, stage), token);
+
+    internal static string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
 
     static Snapshot Extract(string path, PaymentDetails payment)
     {
@@ -244,12 +261,12 @@ internal static class Program
         if (payment.Element(r + "TypeCode")?.Value != "58" || payment.Element(r + "PayeePartyCreditorFinancialAccount")?.Element(r + "IBANID")?.Value != s.Payment.Iban || payment.Element(r + "PayeePartyCreditorFinancialAccount")?.Element(r + "AccountName")?.Value != s.Payment.Beneficiary || payment.Element(r + "PayeeSpecifiedCreditorFinancialInstitution")?.Element(r + "BICID")?.Value != s.Payment.Bic || doc.Descendants(r + "PaymentReference").Single().Value != s.Number) throw new InvalidDataException("XML-Zahlungsdaten stimmen nicht überein.");
     }
 
-    static async Task ValidateMustang(string java, string jar, string source, string log)
+    static async Task ValidateMustang(string java, string jar, string source, string log, Action<string>? progress, CancellationToken cancellationToken)
     {
-        var result = await Run(java, ["-jar", jar, "--action", "validate", "--source", source, "--no-notices", "--disable-file-logging"], log);
+        var result = await Run(java, ["-jar", jar, "--action", "validate", "--source", source, "--no-notices", "--disable-file-logging"], log, cancellationToken);
         var report = ParseReport(result);
         if (report.Elements().LastOrDefault(x => x.Name.LocalName == "summary")?.Attribute("status")?.Value != "valid" || report.Descendants().Any(x => x.Name.LocalName == "summary" && (string?)x.Attribute("status") != "valid")) throw new InvalidDataException("Mustang meldet kein gültiges Ergebnis.");
-        Console.WriteLine("PASS " + Path.GetFileName(log));
+        progress?.Invoke("PASS " + Path.GetFileName(log));
     }
     static void ValidateSchema(string jar, string xml)
     {
@@ -278,8 +295,9 @@ internal static class Program
         if (start < 0) throw new InvalidDataException("Prüfer lieferte keinen XML-Bericht.");
         return XDocument.Parse(text[start..]).Root!;
     }
-    static async Task<string> Run(string file, string[] args, string step)
+    static async Task<string> Run(string file, string[] args, string step, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var directory = Path.GetDirectoryName(step)!;
         var info = new ProcessStartInfo(file) {
             RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
@@ -292,12 +310,14 @@ internal static class Program
         using var process = Process.Start(info) ?? throw new IOException("Werkzeug konnte nicht gestartet werden.");
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
-        using var limit = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(TimeSpan.FromMinutes(2));
         try { await process.WaitForExitAsync(limit.Token); }
         catch (OperationCanceledException)
         {
             if (!process.HasExited) process.Kill(entireProcessTree: true);
             await process.WaitForExitAsync();
+            cancellationToken.ThrowIfCancellationRequested();
             throw new ToolFailure(Path.GetFileName(step), -1);
         }
         await stderr;
@@ -306,7 +326,7 @@ internal static class Program
         return report;
     }
 
-    sealed class ToolFailure(string stage, int exitCode) : Exception
+    internal sealed class ToolFailure(string stage, int exitCode) : Exception
     {
         internal string Stage { get; } = stage;
         internal int ExitCode { get; } = exitCode;

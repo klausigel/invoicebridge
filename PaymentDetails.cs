@@ -44,7 +44,11 @@ internal sealed record PaymentDetails(string Iban, string Beneficiary, string Bi
         return payload;
     }
 
-    internal void AddGiroCode(string input, string output, decimal amount, string reference)
+    // Top-left coordinates in points, specific to the exact approved sample.
+    const int BankLeft = 430, BankTop = 272, BankRight = 574, BankBottom = 317;
+    const double RenderScale = 150 / 72.0;
+
+    internal void AddGiroCode(string input, string output, decimal amount, string reference, RgbRaster? testRaster = null)
     {
         var payload = Payload(amount, reference);
         var matrix = new MultiFormatWriter().encode(payload, BarcodeFormat.QR_CODE, 0, 0,
@@ -58,7 +62,22 @@ internal sealed record PaymentDetails(string Iban, string Beneficiary, string Bi
         if (modules > 69 || matrix.Width != matrix.Height) throw new InvalidDataException("QR überschreitet EPC-Version 13.");
         using var pdf = PdfDocument.Open(input);
         var builder = new PdfDocumentBuilder();
-        var page = builder.AddPage(pdf, 1);
+        var source = pdf.GetPage(1);
+        var page = testRaster == null ? builder.AddPage(pdf, 1) : builder.AddPage(source.Width, source.Height);
+        var font = builder.AddStandard14Font(Standard14Font.Helvetica);
+        if (testRaster != null)
+        {
+            // Rebuild from pixels after removing the bank area. No original PDF object
+            // with the old bank graphic survives underneath the replacement.
+            var from = (int)Math.Floor(BankLeft * RenderScale);
+            var to = (int)Math.Ceiling(BankRight * RenderScale);
+            for (int y = (int)Math.Floor(BankTop * RenderScale); y < (int)Math.Ceiling(BankBottom * RenderScale); y++)
+                testRaster.Data.AsSpan((y * testRaster.Width + from) * 3, (to - from) * 3).Fill(255);
+            page.AddPng(testRaster.ToPng(), new PdfRectangle(0, 0, source.Width, source.Height));
+            page.AddText("TEST - NICHT ZAHLEN", 8, new PdfPoint(BankLeft + 2, source.Height - 283), font);
+            page.AddText("IBAN: " + Iban, 8, new PdfPoint(BankLeft + 2, source.Height - 295), font);
+            page.AddText("BIC: " + Bic, 8, new PdfPoint(BankLeft + 2, source.Height - 307), font);
+        }
         const double left = 435, top = 650, size = 108;
         var bottom = pdf.GetPage(1).Height - top - size;
         page.SetStrokeColor(255, 255, 255);
@@ -73,7 +92,6 @@ internal sealed record PaymentDetails(string Iban, string Beneficiary, string Bi
         for (int y = 0; y < matrix.Height; y++)
             for (int x = 0; x < matrix.Width; x++)
                 if (matrix[x, y]) page.DrawRectangle(new PdfPoint(left + x * step, bottom + (matrix.Height - y - 1) * step), step, step, 0, true);
-        var font = builder.AddStandard14Font(Standard14Font.Helvetica);
         page.AddText("GiroCode - Rechnung " + reference, 7, new PdfPoint(left, bottom + size + 5), font);
         page.ResetColor();
         page.ResetColor();
@@ -94,7 +112,7 @@ internal sealed record PaymentDetails(string Iban, string Beneficiary, string Bi
         return 0;
     }
 
-    internal void VerifyRendered(string originalPath, string resultPath, decimal amount, string reference)
+    internal void VerifyRendered(string originalPath, string resultPath, decimal amount, string reference, bool testPayment = false)
     {
         var original = RgbRaster.Open(originalPath);
         var final = RgbRaster.Open(resultPath);
@@ -106,6 +124,8 @@ internal sealed record PaymentDetails(string Iban, string Beneficiary, string Bi
             var offset = (y * final.Width + x) * 3;
             // Exclude only the intentional QR and caption, in points from top-left.
             if (x >= 430 * 150 / 72.0 && x <= 548 * 150 / 72.0 && y >= 635 * 150 / 72.0 && y <= 762 * 150 / 72.0) continue;
+            if (testPayment && x >= Math.Floor(BankLeft * RenderScale) && x <= Math.Ceiling(BankRight * RenderScale)
+                && y >= Math.Floor(BankTop * RenderScale) && y <= Math.Ceiling(BankBottom * RenderScale)) continue;
             int dr = Math.Abs(original.Data[offset] - rgb[offset]), dg = Math.Abs(original.Data[offset + 1] - rgb[offset + 1]), db = Math.Abs(original.Data[offset + 2] - rgb[offset + 2]);
             if (Math.Max(dr, Math.Max(dg, db)) > 16) changed++;
         }

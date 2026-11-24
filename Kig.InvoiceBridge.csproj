@@ -8,7 +8,7 @@
     <RootNamespace>Kig.InvoiceBridge</RootNamespace>
     <AppHostDotNetSearch>AppRelative</AppHostDotNetSearch>
     <AppHostRelativeDotNet>runtime</AppHostRelativeDotNet>
-    <DefaultItemExcludes>$(DefaultItemExcludes);artifacts/**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);artifacts/**;server/**</DefaultItemExcludes>
     <RestorePackagesPath>$(MSBuildThisFileDirectory).packages</RestorePackagesPath>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
@@ -18,7 +18,8 @@
     <PackageReference Include="ZXing.Net" Version="[0.16.11]" />
   </ItemGroup>
   <ItemGroup>
-    <None Update="invoicebridge.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <InternalsVisibleTo Include="InvoiceBridge.Http" />
+    <None Update="invoicebridge.json" Condition="'$(IncludeLocalInvoiceConfig)' != 'false'" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="invoicebridge.example.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
