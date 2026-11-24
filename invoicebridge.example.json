@@ -1,0 +1,12 @@
+{
+  "SourceDirectory": "invoices",
+  "OutputDirectory": "output",
+  "SourceFileSelection": "InvoiceNumberToken",
+  "ToolsDirectory": "tools",
+  "Bank": {
+    "Iban": "<IBAN>",
+    "Beneficiary": "<Kontoinhaber>",
+    "Bic": "<BIC>",
+    "BankName": "<Bankname>"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "PdfPig": {
+        "type": "Direct",
+        "requested": "[0.1.15, 0.1.15]",
+        "resolved": "0.1.15",
+        "contentHash": "Bf0NO4o2ZSVnemMyj21KDU1sfSgmamFC0pD4aAv19CDNXQsoO1Z6O99gNqpiK/XWWZ5d5i7JkQoT7PUBxEPz5g=="
+      },
+      "ZUGFeRD-csharp": {
+        "type": "Direct",
+        "requested": "[18.0.1, 18.0.1]",
+        "resolved": "18.0.1",
+        "contentHash": "cdSR5YwKXRXPoHlgxB7w4tmRBMs8yTVQ+d6wvLtmSyRqTLDFtra7ihCFGvkgNN6ExWou0jXdoFJ+nC1I3hovSg=="
+      },
+      "ZXing.Net": {
+        "type": "Direct",
+        "requested": "[0.16.11, 0.16.11]",
+        "resolved": "0.16.11",
+        "contentHash": "OZfAVu88hl87BffQ+rlWCj/vLvAhhCK4QnFaoveeF/MY8SjHNSYBQ3qyUEWlPKNgBQGh1syXhCDg10vUnCsqkg=="
+      }
+    }
+  }
+}

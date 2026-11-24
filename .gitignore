@@ -1,0 +1,11 @@
+.vs/
+bin/
+obj/
+.tools/
+.packages/
+output/
+artifacts/
+__pycache__/
+*.pdf
+/invoicebridge.json
+*.class
