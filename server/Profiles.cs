@@ -4,13 +4,22 @@ using System.Text;
 using System.Text.Json;
 using Kig.InvoiceBridge;
 
-internal sealed record Profile(string Id, byte[] KeyHash, PaymentDetails Bank, string? ApprovedGraphicSha256);
+internal enum ProfileMode { Synthetic, LocalReal }
+
+internal sealed record Profile(string Id, byte[] KeyHash, PaymentDetails Bank, string? ApprovedGraphicSha256, ProfileMode Mode);
 
 internal sealed record ProfileFile(string Id, string ApiKey, PaymentDetails Bank, string? ApprovedGraphicSha256);
 
 internal static class Profiles
 {
-    internal static Profile[] Load(string file)
+    internal static ProfileMode LocalMode() => Environment.GetEnvironmentVariable("INVOICEBRIDGE_PROFILE_MODE") switch
+    {
+        null or "" or "synthetic" => ProfileMode.Synthetic,
+        "local-real" => ProfileMode.LocalReal,
+        _ => throw new InvalidDataException("Unbekannter Profilmodus. Erlaubt sind synthetic und local-real.")
+    };
+
+    internal static Profile[] Load(string file, ProfileMode mode)
     {
         var source = JsonSerializer.Deserialize<ProfileFile[]>(File.ReadAllText(file),
             new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new InvalidDataException();
@@ -22,19 +31,27 @@ internal static class Profiles
 
         var result = source.Select(p =>
         {
-            var bank = p.Bank with { Iban = p.Bank.Iban.Replace(" ", "").ToUpperInvariant(),
+            var bank = p.Bank with { Iban = string.Concat(p.Bank.Iban.Where(c => !char.IsWhiteSpace(c))).ToUpperInvariant(),
                 Bic = p.Bank.Bic.Trim().ToUpperInvariant(), Beneficiary = p.Bank.Beneficiary.Trim(),
                 BankName = p.Bank.BankName.Trim() };
-            // The local exercise uses explicitly non-payable German test accounts.
-            bank.Validate("NetProof GmbH");
-            if (bank.Iban[4..12] != "00000000" || string.IsNullOrWhiteSpace(bank.BankName))
+            // Keep the existing synthetic profile restrictions. Local profiles undergo
+            // the same syntax and EPC checks, while the parser owns seller matching.
+            if (mode == ProfileMode.Synthetic)
+                bank.Validate("NetProof GmbH");
+            else
+                _ = bank.Payload(0.01m, "Profilpruefung");
+            var germanPlaceholder = bank.Iban.StartsWith("DE", StringComparison.Ordinal) && bank.Iban[4..12] == "00000000";
+            if ((mode == ProfileMode.Synthetic && !germanPlaceholder) ||
+                (mode == ProfileMode.LocalReal && (germanPlaceholder || p.Id != "KIG" && bank.Iban.StartsWith("NL", StringComparison.Ordinal))) ||
+                string.IsNullOrWhiteSpace(bank.BankName))
                 throw new InvalidDataException();
             var graphic = p.ApprovedGraphicSha256?.ToUpperInvariant();
             if (graphic != null && (graphic.Length != 64 || !graphic.All(char.IsAsciiHexDigit)))
                 throw new InvalidDataException();
-            return new Profile(p.Id, Digest(p.ApiKey), bank, graphic);
+            return new Profile(p.Id, Digest(p.ApiKey), bank, graphic, mode);
         }).ToArray();
-        if (result[0].Bank.Iban == result[1].Bank.Iban || result[0].Bank.Bic == result[1].Bank.Bic)
+        if (result[0].Bank.Iban == result[1].Bank.Iban ||
+            (mode == ProfileMode.Synthetic && result[0].Bank.Bic == result[1].Bank.Bic))
             throw new InvalidDataException();
         return result;
     }

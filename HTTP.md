@@ -1,5 +1,8 @@
 # Lokaler InvoiceBridge-HTTP-Test
 
+Für eigene lokale Kontodaten und einen anderen F5-Port siehe
+[Lokaler Test mit eigenen Mandantenprofilen](LOCAL-REAL.md).
+
 Die lokale Startseite unter `http://127.0.0.1:8080/` zeigt zunächst die
 Anmeldung. Nach einmaliger Eingabe des API-Schlüssels zeigt die Arbeitsansicht
 den angemeldeten Mandanten und „Abmelden“. Ein Reload übernimmt die gültige
@@ -120,6 +123,45 @@ Ein `POST /v1/convert` erwartet die PDF-Bytes direkt im Body mit
 `Content-Type: application/pdf` und den Schlüssel im Header `X-Api-Key`.
 Der Body ist auf 1 MiB begrenzt. Zwei Konvertierungen können parallel laufen.
 
+Die Web-Checkbox „GiroCode in die PDF einfügen“ ist beim Öffnen aktiviert.
+Die API-Option dazu lautet `POST /v1/convert?giroCode=true` oder
+`POST /v1/convert?giroCode=false`. Ohne Angabe bleibt der GiroCode aktiv.
+Akzeptiert wird genau ein kleingeschriebener Wert `true` oder `false`.
+Andere oder doppelte Werte ergeben HTTP 400 mit `invalid_giro_code_option`.
+Bei `false` bleiben vorhandene Inhalte im sonst verwendeten GiroCode-Bereich
+erhalten. Der freigegebene grafische Bankersatz und die vollständige
+ZUGFeRD-/PDF/A-3b-Prüfung laufen in beiden Fällen.
+
+Die synthetische PDF-GiroCode-Abnahme lässt sich zusätzlich mit dem
+vorhandenen lokalen Docker-Image, Poppler `pdftoppm`, Pillow und pypdf nachstellen:
+
+```powershell
+& $python .\scripts\test-pdf-girocode.py --publish .\artifacts\http-publish
+```
+
+Sie untersucht den fertigen PDF-Inhaltsstrom, rendert denselben QR-Ausschnitt
+bei 96 und 300 dpi und dekodiert den Bildausschnitt mit ZXing. Die DPI-Werte
+sind digitale Bildschirm- und Drucksimulationen.
+
+Der GiroCode wird auf einem gemeinsamen Vektorpfad gefüllt. Der
+PDF-Block zeigt über dem abgerundeten schwarzen Rahmen den Titel „GiroCode“.
+„Mit Banking App scannen“ steht senkrecht in der rechten Rahmenkante. Rahmen und
+Beschriftung liegen außerhalb der Ruhezone und innerhalb des freigegebenen
+Bereichs. Die Rechnungsnummer steht als Zahlungsreferenz im EPC-Payload und im XML.
+
+Der Vorher-/Nachher-Test misst aufgehellte Pixel innerhalb der drei schwarzen
+Finder-Zentren. Er prüft eine synthetische Rechnung vor und nach PDF/A bei
+75, 100, 125 und 150 Prozent sowie bei 300 und 600 dpi. Dazu benötigt er
+zwei lokale Windows-HTTP-Builds, die lokalen Windows-Werkzeuge,
+Python mit pypdfium2, ReportLab, Pillow und pypdf sowie Poppler.
+
+```powershell
+& $python .\scripts\test-qr-rendering.py --before <alter-Publish-Ordner> --after <neuer-Publish-Ordner>
+```
+
+Für Rahmen, Beschriftung, Ruhezone und EPC-Abgleich bei KIG und Manuel dient
+`scripts/test-qr-layout.py --before <Publish-mit-kurzem-Hinweis> --publish <aktueller-Publish>`.
+
 ```powershell
 curl.exe --fail-with-body http://127.0.0.1:8080/v1/convert -H "X-Api-Key: <TEST-API-KEY>" -H "Content-Type: application/pdf" --data-binary "@<PFAD-ZUR-MUSTERRECHNUNG>" -o "<ZIEL-PDF>"
 ```
@@ -130,6 +172,7 @@ Fehler liefern `application/problem+json` mit einem stabilen `code`.
 | HTTP | Code | Bedeutung |
 | --- | --- | --- |
 | 401 | `api_key_required` | Schlüssel fehlt oder ist ungültig |
+| 403 | `tenant_template_mismatch` | KIG-Layout mit einem anderen Profil oder außerhalb von `local-real` |
 | 413 | `upload_too_large` | Upload größer als 1 MiB |
 | 415 | `pdf_required` | Medientyp ist nicht `application/pdf` |
 | 422 | `payment_conflict` | Lesbare Zahlungsdaten widersprechen dem Profil |

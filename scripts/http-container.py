@@ -125,17 +125,20 @@ def test_profiles():
     return [profile('KIG', 1), profile('Manuel', 2)]
 
 
-def fixture(banks=(), graphic=False, bank_x=432, hide_bank=False):
+def fixture(banks=(), graphic=False, bank_x=432, hide_bank=False,
+            seller='NetProof GmbH Testweg 1 21376 Salzhausen', occupied_qr=False):
     """Synthetic one-page fixture for the existing coordinate-based sample parser."""
     rows = [
         (120, 368, '112684'), (120, 382, '09.10.2025'), (347, 367, '09.10.2025'),
-        (70, 185, 'NetProof GmbH Testweg 1 21376 Salzhausen'), (70, 208, 'Demo-Empfaenger'),
+        (70, 185, seller), (70, 208, 'Demo-Empfaenger'),
         (70, 220, 'Teststrasse 2'), (70, 243, '12345 Testort'), (120, 699, 'DE000000000'),
         (70, 435, 'HelloExchange 1.x HV'), (70, 460, 'SYNTHETIC LINE ITEM'),
         (293, 433, '1,00'), (315, 433, 'Stck.'), (349, 433, '19,00%'), (403, 433, '383,20 EUR'),
         (510, 433, '383,20 EUR'), (510, 543, '383,20 EUR'), (510, 557, '72,81 EUR'),
         (510, 573, '456,01 EUR'), (114, 718, 'Vorkasse'),
     ]
+    if occupied_qr:
+        rows.append((444, 700, 'KEEP THIS VISIBLE'))
     for index, bank in enumerate(banks):
         rows.extend([(bank_x, 285 + index * 20, 'IBAN: ' + bank['iban']),
                      (bank_x, 295 + index * 20, 'BIC: ' + bank['bic'])])

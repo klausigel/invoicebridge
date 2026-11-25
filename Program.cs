@@ -111,12 +111,13 @@ internal static class Program
 
     internal static async Task<string> ConvertAsync(string input, string evidence, PaymentDetails payment,
         ToolPaths tools, string expectedNumber, bool replaceGraphicBank, Action<string>? progress = null,
-        CancellationToken cancellationToken = default, bool requireBlankQrArea = false)
+        CancellationToken cancellationToken = default, bool requireBlankQrArea = false, bool includeGiroCode = true,
+        Snapshot? extractedInvoice = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var mustang = tools.Mustang;
         Snapshot snapshot;
-        try { snapshot = Extract(input, payment); }
+        try { snapshot = extractedInvoice ?? Extract(input, payment); }
         catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException)
         {
             throw new BridgeException(11, "Das PDF entspricht nicht dem unterstützten Rechnungsmuster.");
@@ -129,22 +130,24 @@ internal static class Program
 
         // XML must pass before the hybrid PDF is created. No network or web validators.
         await ValidateMustang(tools.Java, mustang, xml, Path.Combine(evidence, "xml-validation"), progress, cancellationToken);
-        var withGiroCode = Path.Combine(evidence, "with-girocode.pdf");
+        var prepared = input;
         var originalRender = Path.Combine(evidence, "original-render.ppm");
-        RgbRaster? inputRaster = null;
-        if (replaceGraphicBank || requireBlankQrArea)
-        {
+        var renderOriginalEarly = replaceGraphicBank || (includeGiroCode && requireBlankQrArea);
+        if (renderOriginalEarly)
             await Render(tools, input, originalRender, "render-original", cancellationToken);
-            inputRaster = RgbRaster.Open(originalRender);
-            if (requireBlankQrArea) PaymentDetails.RequireBlankQrArea(inputRaster);
+        if (replaceGraphicBank || includeGiroCode)
+        {
+            var raster = renderOriginalEarly ? RgbRaster.Open(originalRender) : null;
+            if (includeGiroCode && requireBlankQrArea) PaymentDetails.RequireBlankQrArea(raster!);
+            prepared = Path.Combine(evidence, "prepared.pdf");
+            snapshot.Payment.PreparePdf(input, prepared, snapshot.Gross, snapshot.Number,
+                includeGiroCode, replaceGraphicBank ? raster : null);
         }
-        snapshot.Payment.AddGiroCode(input, withGiroCode, snapshot.Gross, snapshot.Number,
-            replaceGraphicBank ? inputRaster : null);
         var basePdf = Path.Combine(evidence, "pdfa3-base.pdf");
         var definition = Path.Combine(evidence, "pdfa.ps");
         var icc = tools.IccProfile.Replace('\\', '/');
         File.WriteAllText(definition, "%!\n/ICCProfile (" + icc.Replace("(", "\\(").Replace(")", "\\)") + ") def\n[/_objdef {icc_PDFA} /type /stream /OBJ pdfmark\n[{icc_PDFA} << /N 3 >> /PUT pdfmark\n[{icc_PDFA} ICCProfile (r) file /PUT pdfmark\n[/_objdef {OutputIntent_PDFA} /type /dict /OBJ pdfmark\n[{OutputIntent_PDFA} << /Type /OutputIntent /S /GTS_PDFA1 /DestOutputProfile {icc_PDFA} /OutputConditionIdentifier (sRGB) >> /PUT pdfmark\n[{Catalog} << /OutputIntents [ {OutputIntent_PDFA} ] >> /PUT pdfmark\n");
-        await Run(tools.Ghostscript, ["-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite", "-dPDFA=3", "-dPDFACompatibilityPolicy=2", "-sColorConversionStrategy=RGB", "-dAutoRotatePages=/None", "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false", "-dDownsampleMonoImages=false", "--permit-file-read=" + icc, "-sOutputFile=" + basePdf, definition, withGiroCode], Path.Combine(evidence, "ghostscript"), cancellationToken);
+        await Run(tools.Ghostscript, ["-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite", "-dPDFA=3", "-dPDFACompatibilityPolicy=2", "-sColorConversionStrategy=RGB", "-dAutoRotatePages=/None", "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false", "-dDownsampleMonoImages=false", "--permit-file-read=" + icc, "-sOutputFile=" + basePdf, definition, prepared], Path.Combine(evidence, "ghostscript"), cancellationToken);
         var candidate = Path.Combine(evidence, "candidate.pdf");
         await Run(tools.Java, ["-jar", mustang, "--action", "combine", "--source", basePdf, "--source-xml", xml, "--out", candidate, "--format", "fx", "--version", "2", "--profile", "E", "--no-additional-attachments", "--disable-file-logging"], Path.Combine(evidence, "combine"), cancellationToken);
         await ValidateMustang(tools.Java, mustang, candidate, Path.Combine(evidence, "hybrid-validation"), progress, cancellationToken);
@@ -160,10 +163,10 @@ internal static class Program
         // Keep QR decoding and the visual comparison available in the deployed
         // CLI without relying on the development Python/Poppler installation.
         var finalRender = Path.Combine(evidence, "final-render.ppm");
-        if (inputRaster == null) await Render(tools, input, originalRender, "render-original", cancellationToken);
+        if (!renderOriginalEarly) await Render(tools, input, originalRender, "render-original", cancellationToken);
         await Render(tools, candidate, finalRender, "render-final", cancellationToken);
-        snapshot.Payment.VerifyRendered(originalRender, finalRender, snapshot.Gross, snapshot.Number, replaceGraphicBank);
-        progress?.Invoke("PASS rendered-qr-and-image");
+        snapshot.Payment.VerifyRendered(originalRender, finalRender, snapshot.Gross, snapshot.Number, replaceGraphicBank, includeGiroCode);
+        progress?.Invoke(includeGiroCode ? "PASS rendered-qr-and-image" : "PASS rendered-image");
         return candidate;
     }
 
@@ -217,8 +220,14 @@ internal static class Program
         var tax = Amount(Region("vatTotal", 509, 549, 558, 563));
         var gross = Amount(Region("grossTotal", 509, 564, 558, 578));
         var terms = Region("paymentTerms", 113, 708, 161, 723);
-        if (no != "112684" || unit != "Stck." || rate != 19 || terms != "Vorkasse" || !seller.StartsWith("NetProof GmbH ") || !name.StartsWith("HelloExchange 1.x HV")) throw new InvalidDataException("Der geprüfte Musterfall wurde nicht erkannt.");
-        if (quantity * price != lineNet || lineNet != net || decimal.Round(net * rate / 100, 2, MidpointRounding.AwayFromZero) != tax || net + tax != gross || gross != 456.01m) throw new InvalidDataException("Betrags- oder Rundungsprüfung fehlgeschlagen.");
+        if (!Regex.IsMatch(seller, @"^NetProof GmbH .+ 21376 Salzhausen$"))
+            throw new BridgeException(11, "Rechnungssteller nicht unterstützt. Der Parser ist auf das geprüfte NetProof-Muster begrenzt.");
+        if (payment.Beneficiary != "NetProof GmbH")
+            throw new BridgeException(11, "Der Kontoinhaber des Mandantenprofils stimmt nicht mit dem Rechnungssteller des unterstützten Musters überein.");
+        if (no != "112684" || unit != "Stck." || rate != 19 || terms != "Vorkasse" || !name.StartsWith("HelloExchange 1.x HV"))
+            throw new BridgeException(11, "Die Rechnung weicht vom unterstützten Muster ab (Rechnungsnummer, Position, Steuer oder Zahlungsbedingung).");
+        if (quantity * price != lineNet || lineNet != net || decimal.Round(net * rate / 100, 2, MidpointRounding.AwayFromZero) != tax || net + tax != gross || gross != 456.01m)
+            throw new BridgeException(11, "Die Beträge oder Rundung passen nicht zum unterstützten Einzelmuster.");
         fields["countryCodes"] = new("DE/DE", "Explicitly confirmed by Klaus; not printed as country codes", null);
         fields["taxCategory"] = new("S", "Explicitly confirmed regular VAT by Klaus", null);
         fields["prepaidAmount"] = new("0.00", "Explicitly confirmed invoice at issuance; no payment received", null);
@@ -238,9 +247,12 @@ internal static class Program
         invoice.Type = InvoiceType.Invoice;
         invoice.SetSeller(s.Seller, s.SellerPostcode, s.SellerCity, s.SellerStreet, CountryCodes.DE);
         invoice.AddSellerTaxRegistration(s.VatId, TaxRegistrationSchemeID.VA);
+        if (s.FiscalNumber is { } fiscalNumber)
+            invoice.AddSellerTaxRegistration(fiscalNumber, TaxRegistrationSchemeID.FC);
         invoice.SetBuyer(s.Buyer, s.BuyerPostcode, s.BuyerCity, s.BuyerStreet, CountryCodes.DE);
         invoice.ActualDeliveryDate = s.Delivery;
-        invoice.AddTradePaymentTerms(s.Terms);
+        invoice.AddTradePaymentTerms(s.Terms, s.DueDate);
+        if (s.PrintedReference is { } reference) invoice.AddNote("Referenz: " + reference);
         s.Payment.Validate(s.Seller);
         invoice.SetPaymentMeans(PaymentMeansTypeCodes.SEPACreditTransfer);
         invoice.PaymentReference = s.Number;
@@ -249,6 +261,18 @@ internal static class Program
         invoice.AddApplicableTradeTax(s.Net, s.Rate, s.Tax, TaxTypes.VAT, TaxCategoryCodes.S);
         invoice.SetTotals(lineTotalAmount: s.LineNet, chargeTotalAmount: 0, allowanceTotalAmount: 0, taxBasisAmount: s.Net, taxTotalAmount: s.Tax, grandTotalAmount: s.Gross, totalPrepaidAmount: 0, duePayableAmount: s.Gross, roundingAmount: 0);
         invoice.Save(path, ZUGFeRDVersion.Version23, Profile.Comfort);
+        if (!s.Delivery.HasValue)
+        {
+            // The writer omits this required CII container without a delivery date.
+            XNamespace r = "urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100";
+            var xml = XDocument.Load(path);
+            var settlement = xml.Descendants(r + "ApplicableHeaderTradeSettlement").Single();
+            if (settlement.Parent!.Element(r + "ApplicableHeaderTradeDelivery") == null)
+            {
+                settlement.AddBeforeSelf(new XElement(r + "ApplicableHeaderTradeDelivery"));
+                xml.Save(path);
+            }
+        }
     }
 
     static void CheckXml(Snapshot s, XDocument doc)
@@ -262,6 +286,17 @@ internal static class Program
         void Check(string name, decimal expected) { var n = doc.Descendants(r + name).Last(); if (decimal.Parse(n.Value, CultureInfo.InvariantCulture) != expected) throw new InvalidDataException("XML-Betrag stimmt nicht überein: " + name); }
         Check("LineTotalAmount", s.LineNet); Check("TaxBasisTotalAmount", s.Net); Check("TaxTotalAmount", s.Tax); Check("GrandTotalAmount", s.Gross); Check("TotalPrepaidAmount", 0); Check("DuePayableAmount", s.Gross);
         if (doc.Descendants(r + "SellerTradeParty").Single().Element(r + "Name")?.Value != s.Seller || doc.Descendants(r + "BuyerTradeParty").Single().Element(r + "Name")?.Value != s.Buyer) throw new InvalidDataException("XML-Parteien stimmen nicht überein.");
+        if (s.DueDate is { } due)
+        {
+            var terms = doc.Descendants(r + "SpecifiedTradePaymentTerms").Single();
+            var tax = doc.Descendants(r + "ApplicableTradeTax").ToArray();
+            if (terms.Element(r + "DueDateDateTime")?.Elements().Single().Value != due.ToString("yyyyMMdd", CultureInfo.InvariantCulture) ||
+                doc.Descendants(r + "ActualDeliverySupplyChainEvent").Any() ||
+                !ex.Descendants(r + "Content").Any(content => content.Value == "Referenz: " + s.PrintedReference) ||
+                tax.Length != 2 || tax.Any(t => (string?)t.Element(r + "CategoryCode") != "S" ||
+                    (decimal?)t.Element(r + "RateApplicablePercent") != s.Rate))
+                throw new InvalidDataException("XML-Fälligkeit, Referenz oder Steuersatz stimmt nicht überein.");
+        }
         var payment = doc.Descendants(r + "SpecifiedTradeSettlementPaymentMeans").Single();
         if (payment.Element(r + "TypeCode")?.Value != "58" || payment.Element(r + "PayeePartyCreditorFinancialAccount")?.Element(r + "IBANID")?.Value != s.Payment.Iban || payment.Element(r + "PayeePartyCreditorFinancialAccount")?.Element(r + "AccountName")?.Value != s.Payment.Beneficiary || payment.Element(r + "PayeeSpecifiedCreditorFinancialInstitution")?.Element(r + "BICID")?.Value != s.Payment.Bic || doc.Descendants(r + "PaymentReference").Single().Value != s.Number) throw new InvalidDataException("XML-Zahlungsdaten stimmen nicht überein.");
     }
@@ -383,5 +418,10 @@ internal static class Program
     }
 
     internal record Field(string Value, string Source, double[]? Region);
-    internal record Snapshot(string Number, DateTime Date, DateTime Delivery, string Seller, string SellerStreet, string SellerPostcode, string SellerCity, string VatId, string Buyer, string BuyerStreet, string BuyerPostcode, string BuyerCity, string ItemName, string Description, decimal Quantity, decimal Price, decimal LineNet, decimal Rate, decimal Net, decimal Tax, decimal Gross, string Terms, Dictionary<string, Field> Provenance, PaymentDetails Payment);
+    internal record Snapshot(string Number, DateTime Date, DateTime? Delivery, string Seller, string SellerStreet, string SellerPostcode, string SellerCity, string VatId, string Buyer, string BuyerStreet, string BuyerPostcode, string BuyerCity, string ItemName, string Description, decimal Quantity, decimal Price, decimal LineNet, decimal Rate, decimal Net, decimal Tax, decimal Gross, string Terms, Dictionary<string, Field> Provenance, PaymentDetails Payment)
+    {
+        internal DateTime? DueDate { get; init; }
+        internal string? PrintedReference { get; init; }
+        internal string? FiscalNumber { get; init; }
+    }
 }

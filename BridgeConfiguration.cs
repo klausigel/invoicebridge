@@ -39,7 +39,7 @@ internal sealed record BridgeConfiguration
             // Keep the approved exact sample scope, even though master data are
             // now read from JSON: silently changing the raster letterhead's
             // bank account would make the hybrid inconsistent.
-            var approved = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", bank.Iban, bank.Beneficiary, bank.Bic, bank.BankName))));
+            var approved = BankFingerprint(bank);
             if (approved != ApprovedBankFingerprint) throw new InvalidDataException("Bankdaten entsprechen nicht den freigegebenen Stammdaten der Musterrechnung.");
             return (settings with {
                 SourceDirectory = Resolve(settings.SourceDirectory),
@@ -54,6 +54,9 @@ internal sealed record BridgeConfiguration
     }
 
     internal const string ApprovedBankFingerprint = "02ED39B0D87013760781554BEA4AB73EC43606250579B939578DC15337E78D51";
+    internal static string BankFingerprint(PaymentDetails bank) => Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+            string.Join("\n", bank.Iban, bank.Beneficiary, bank.Bic, bank.BankName))));
 }
 
 internal sealed class BridgeException(int exitCode, string message) : Exception(message)

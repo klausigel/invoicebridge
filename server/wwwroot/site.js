@@ -258,7 +258,8 @@ submit('convert', button => {
   resetDownload();
   const file = by('convert-file').files[0];
   busy(button,'convert-status','Datei wird umgewandelt und geprüft …', async current => {
-    const result = await checked(await post('/v1/convert',file,'application/pdf'));
+    const option = by('include-giro-code').checked ? 'true' : 'false';
+    const result = await checked(await post('/v1/convert?giroCode=' + option,file,'application/pdf'));
     if (!result.headers.get('content-type')?.startsWith('application/pdf')) throw new Error('Der Dienst hat keine PDF geliefert.');
     const pdf = await result.blob();
     if (!current()) return;

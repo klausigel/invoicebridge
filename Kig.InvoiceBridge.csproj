@@ -20,6 +20,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="InvoiceBridge.Http" />
     <None Update="invoicebridge.json" Condition="'$(IncludeLocalInvoiceConfig)' != 'false'" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <None Update="invoicebridge.example.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="invoicebridge.example.json" Condition="'$(IncludeLocalInvoiceConfig)' != 'false'" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

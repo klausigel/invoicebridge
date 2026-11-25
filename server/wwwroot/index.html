@@ -43,6 +43,7 @@
       <p>Die freigegebene Rechnungsvorlage hochladen und die geprüfte ZUGFeRD-PDF herunterladen.</p>
       <form id="convert">
         <label class="upload" for="convert-file"><strong>Rechnungs-PDF</strong><input id="convert-file" type="file" accept=".pdf,application/pdf" aria-describedby="convert-file-message" required><small>PDF hier ablegen oder auswählen, maximal 1 MiB</small><span class="file-message" id="convert-file-message" role="status"></span></label>
+        <label class="convert-option"><input id="include-giro-code" type="checkbox" checked> GiroCode in die PDF einfügen</label>
         <button class="primary" type="submit">PDF umwandeln</button>
       </form>
       <p id="convert-status" class="status" role="status"></p>

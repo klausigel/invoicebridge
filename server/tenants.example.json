@@ -1,0 +1,24 @@
+[
+  {
+    "id": "KIG",
+    "apiKey": "<EIGENER-NEUER-KIG-SCHLUESSEL>",
+    "bank": {
+      "iban": "<DE-IBAN>",
+      "beneficiary": "<KONTOINHABER-KIG>",
+      "bic": "<BIC>",
+      "bankName": "<BANKNAME>"
+    },
+    "approvedGraphicSha256": null
+  },
+  {
+    "id": "Manuel",
+    "apiKey": "<EIGENER-NEUER-MANUEL-SCHLUESSEL>",
+    "bank": {
+      "iban": "<DE-IBAN>",
+      "beneficiary": "<KONTOINHABER-MANUEL>",
+      "bic": "<BIC>",
+      "bankName": "<BANKNAME>"
+    },
+    "approvedGraphicSha256": null
+  }
+]

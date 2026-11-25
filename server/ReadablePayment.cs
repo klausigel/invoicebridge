@@ -68,7 +68,14 @@ internal static class ReadablePayment
     static bool IsApprovedGraphic(string input, Profile profile)
     {
         var hash = Kig.InvoiceBridge.Program.Hash(input);
-        return (profile.Id == "Manuel" && hash == Kig.InvoiceBridge.Program.SampleHash) || hash == profile.ApprovedGraphicSha256;
+        if (hash == Kig.InvoiceBridge.Program.SampleHash)
+        {
+            // The historically reviewed picture must never be replaced with a
+            // different real account, even if its digest is entered explicitly.
+            return profile.Id == "Manuel" && (profile.Mode == ProfileMode.Synthetic ||
+                BridgeConfiguration.BankFingerprint(profile.Bank) == BridgeConfiguration.ApprovedBankFingerprint);
+        }
+        return hash == profile.ApprovedGraphicSha256;
     }
 
     static PaymentDecision Reject(string code) => new(null, false, code);

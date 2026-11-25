@@ -6,7 +6,16 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Kig.InvoiceBridge.csproj" AdditionalProperties="IncludeLocalInvoiceConfig=false" />
-    <Content Remove="*.local.json" />
+    <Content Remove="**/*.local.json;tenants.example.json" />
+    <None Remove="tenants.real.local.json;tenants.example.json" />
+    <None Include="tenants.example.json">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+    </None>
+    <None Include="tenants.real.local.json" Condition="Exists('tenants.real.local.json')">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+    </None>
   </ItemGroup>
   <ItemGroup Condition="'$(Configuration)' == 'Debug'">
     <!-- Replace manually copied assets even when their timestamps are newer than the source. -->

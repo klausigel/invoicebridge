@@ -60,7 +60,7 @@ copy(root/'LINUX.md',stage/'LINUX.md')
 copy(root/'invoicebridge.example.json',stage/'invoicebridge.example.json')
 if a.include_local_sample:copy(a.include_local_sample,stage/'invoices/sample_112684.pdf')
 source=stage/'source';source.mkdir()
-for name in ['Program.cs','PaymentDetails.cs','RgbRaster.cs','BridgeConfiguration.cs','InvoiceSourceResolver.cs','ToolPaths.cs','Kig.InvoiceBridge.csproj','global.json','NuGet.config','invoicebridge.example.json','packages.lock.json','LICENSE','DEPLOYMENT-README.md','LINUX.md']:
+for name in ['Program.cs','KigInvoice.cs','PaymentDetails.cs','RgbRaster.cs','BridgeConfiguration.cs','InvoiceSourceResolver.cs','ToolPaths.cs','Kig.InvoiceBridge.csproj','global.json','NuGet.config','invoicebridge.example.json','packages.lock.json','LICENSE','DEPLOYMENT-README.md','LINUX.md']:
  copy(root/name,source/name)
 copy(root/'scripts',source/'scripts')
 for name in ['pdfpig/0.1.15/pdfpig.0.1.15.nupkg','zugferd-csharp/18.0.1/zugferd-csharp.18.0.1.nupkg','zxing.net/0.16.11/zxing.net.0.16.11.nupkg']:

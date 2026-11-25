@@ -13,7 +13,8 @@ p,small{color:var(--muted)}p{margin:.4rem 0 1.15rem}
 .session{display:flex;align-items:center;gap:.55rem;color:#e7f5f4;font-size:.9rem}.session button{border-color:#8bb4b7;background:transparent;color:#fff;padding:.3rem .55rem}
 .sign-in{max-width:31rem;margin-inline:auto}.sign-in form{display:grid;gap:.6rem}.sign-in button{justify-self:start;margin-top:.35rem}
 label{font-weight:650}.upload small{font-weight:400}#session-status:not(:empty){margin:0 0 .8rem}
-input,button{font:inherit}input:not([type=file]){display:block;width:100%;padding:.52rem .65rem;border:1px solid #8fa7b1;border-radius:.46rem;background:#fff;color:var(--ink)}
+input,button{font:inherit}input:not([type=file]):not([type=checkbox]){display:block;width:100%;padding:.52rem .65rem;border:1px solid #8fa7b1;border-radius:.46rem;background:#fff;color:var(--ink)}
+.convert-option{display:flex;align-items:center;gap:.55rem;margin-bottom:1rem;width:fit-content;cursor:pointer}.convert-option input{width:1.1rem;height:1.1rem;margin:0;accent-color:var(--accent)}
 button,.download{cursor:pointer;border:1px solid transparent;border-radius:.5rem;padding:.65rem 1rem;font-weight:680}
 :focus-visible{outline:3px solid var(--focus);outline-offset:3px}
 .tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;margin-bottom:.6rem}

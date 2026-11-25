@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Net;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Kig.InvoiceBridge;
 
 const int maxUpload = 1024 * 1024;
@@ -8,9 +6,25 @@ const int maxResult = 4 * 1024 * 1024;
 Profile[] profiles;
 ToolPaths tools;
 BrowserSessions sessions;
+LocalHosting hosting;
+ProfileMode mode;
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions {
+    Args = args, EnvironmentName = "Production", ContentRootPath = AppContext.BaseDirectory
+});
+builder.Logging.ClearProviders();
 try
 {
-    profiles = Profiles.Load(Environment.GetEnvironmentVariable("INVOICEBRIDGE_PROFILES") ?? "");
+    mode = Profiles.LocalMode();
+    hosting = LocalHosting.Resolve(builder.Configuration, mode);
+}
+catch (InvalidDataException ex)
+{
+    Console.Error.WriteLine("InvoiceBridge: " + ex.Message);
+    return 2;
+}
+try
+{
+    profiles = Profiles.Load(Environment.GetEnvironmentVariable("INVOICEBRIDGE_PROFILES") ?? "", mode);
     sessions = new BrowserSessions(profiles, BrowserSessions.LocalLifetime(), TimeProvider.System);
     tools = ToolPaths.Resolve(new BridgeConfiguration {
         Bank = profiles[0].Bank, SourceDirectory = ".", OutputDirectory = ".", SourceFileSelection = "InvoiceNumberToken",
@@ -20,21 +34,15 @@ try
 }
 catch (Exception)
 {
-    Console.Error.WriteLine("InvoiceBridge: Profile oder Werkzeuge konnten nicht geladen werden.");
+    Console.Error.WriteLine("InvoiceBridge: Profile oder Werkzeuge konnten nicht geladen werden. Profilmodus, Dateipfad, zwei unterschiedliche Schlüssel und Bankfelder prüfen.");
     return 2;
 }
 
-var builder = WebApplication.CreateBuilder(new WebApplicationOptions {
-    Args = [], EnvironmentName = "Production", ContentRootPath = AppContext.BaseDirectory
-});
-builder.Logging.ClearProviders();
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.AddServerHeader = false;
     options.Limits.MaxRequestBodySize = maxUpload;
-    // Only the container launcher sets this. The host-side published port is loopback-only.
-    var address = Environment.GetEnvironmentVariable("INVOICEBRIDGE_CONTAINER") == "1" ? IPAddress.Any : IPAddress.Loopback;
-    options.Listen(address, 8080, listen => listen.Protocols = HttpProtocols.Http1);
+    hosting.Configure(options);
 });
 using var active = new SemaphoreSlim(2);
 await using var app = builder.Build();
@@ -54,6 +62,13 @@ app.MapPost("/v1/convert", async (HttpContext context) =>
 {
     var profile = sessions.Authorize(context, out var denied);
     if (profile == null) return denied;
+    bool includeGiroCode = true;
+    if (context.Request.Query.TryGetValue("giroCode", out var values))
+    {
+        if (values.Count != 1 || values[0] is not ("true" or "false"))
+            return Error(400, "invalid_giro_code_option", "giroCode muss genau einmal den Wert true oder false haben.");
+        includeGiroCode = values[0] == "true";
+    }
     if (!string.Equals(context.Request.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase))
         return Error(415, "pdf_required", "Erwartet wird application/pdf als Request-Body.");
     if (context.Request.ContentLength > maxUpload)
@@ -71,10 +86,22 @@ app.MapPost("/v1/convert", async (HttpContext context) =>
             var input = Path.Combine(work.FullName, "input.pdf");
             await using (var upload = File.Create(input))
                 await context.Request.Body.CopyToAsync(upload, token);
+            var kig = KigInvoice.Read(input, profile.Bank, profile.Id == "KIG" && profile.Mode == ProfileMode.LocalReal);
+            if (kig == null && profile.Mode == ProfileMode.LocalReal)
+            {
+                try { _ = Kig.InvoiceBridge.Program.Extract(input, profile.Bank); }
+                catch (BridgeException) { throw; }
+                catch (Exception)
+                {
+                    return Error(422, "unsupported_pdf", "Die benötigten Felder der bekannten Rechnungsvorlage konnten nicht eindeutig gelesen werden.");
+                }
+            }
             PaymentDecision decision;
             try
             {
-                decision = ReadablePayment.Decide(input, profile);
+                decision = kig == null
+                    ? ReadablePayment.Decide(input, profile)
+                    : new PaymentDecision(kig.Payment, false, null);
             }
             catch (Exception)
             {
@@ -87,8 +114,8 @@ app.MapPost("/v1/convert", async (HttpContext context) =>
                     _ => Error(422, "payment_unclear", "Der Bankblock fehlt, ist unklar oder ist für einen Ersatz nicht freigegeben.")
                 };
             var candidate = await Kig.InvoiceBridge.Program.ConvertAsync(input, work.FullName, decision.Payment, tools,
-                "112684", replaceGraphicBank: decision.ReplaceGraphicBank, cancellationToken: token,
-                requireBlankQrArea: !decision.ReplaceGraphicBank);
+                kig?.Number ?? "112684", replaceGraphicBank: decision.ReplaceGraphicBank, cancellationToken: token,
+                requireBlankQrArea: true, includeGiroCode: includeGiroCode, extractedInvoice: kig);
             if (new FileInfo(candidate).Length > maxResult)
                 throw new InvalidDataException();
             var result = await File.ReadAllBytesAsync(candidate, token);
@@ -115,6 +142,12 @@ app.MapPost("/v1/convert", async (HttpContext context) =>
     catch (Kig.InvoiceBridge.Program.ToolFailure)
     {
         return Error(500, "tool_failed", "Ein Konvertierungs- oder Prüfwerkzeug ist fehlgeschlagen.");
+    }
+    catch (BridgeException ex) when (ex.ExitCode is 14 or 15)
+    {
+        return ex.ExitCode == 14
+            ? Error(403, "tenant_template_mismatch", ex.Message)
+            : Error(422, "payment_conflict", ex.Message);
     }
     catch (BridgeException ex) when (ex.ExitCode == 11)
     {
